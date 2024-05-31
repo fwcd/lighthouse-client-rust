@@ -4,7 +4,7 @@ use tracing::info;
 use tokio::time;
 use std::time::Duration;
 
-async fn run(mut lh: Lighthouse<TokioWebSocket>) -> Result<()> {
+async fn run(lh: Lighthouse<TokioWebSocket>) -> Result<()> {
     info!("Connected to the Lighthouse server");
 
     loop {
