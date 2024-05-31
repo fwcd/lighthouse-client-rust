@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc, fmt::Debug};
+use std::{collections::HashMap, fmt::Debug, sync::{atomic::{AtomicI32, Ordering}, Arc}};
 
 use async_tungstenite::tungstenite::{Message, self};
 use futures::{prelude::*, channel::mpsc::{Sender, self}, stream::{SplitSink, SplitStream}, lock::Mutex};
@@ -9,15 +9,16 @@ use tracing::{warn, error, debug, info};
 use crate::{Check, Error, Result, Spawner};
 
 /// A connection to the lighthouse server for sending requests and receiving events.
+#[derive(Clone)]
 pub struct Lighthouse<S> {
     /// The sink-part of the WebSocket connection.
-    ws_sink: SplitSink<S, Message>,
+    ws_sink: Arc<Mutex<SplitSink<S, Message>>>,
     /// The response/event slots, keyed by request id.
     slots: Arc<Mutex<HashMap<i32, Slot<ServerMessage<Value>>>>>,
     /// The credentials used to authenticate with the lighthouse.
     authentication: Authentication,
     /// The next request id. Incremented on every request.
-    request_id: i32,
+    request_id: Arc<AtomicI32>,
 }
 
 /// A facility for coordinating asynchronous responses to a request between a
@@ -47,10 +48,10 @@ impl<S> Lighthouse<S>
         let (ws_sink, ws_stream) = web_socket.split();
         let slots = Arc::new(Mutex::new(HashMap::new()));
         let lh = Self {
-            ws_sink,
+            ws_sink: Arc::new(Mutex::new(ws_sink)),
             slots: slots.clone(),
             authentication,
-            request_id: 0,
+            request_id: Arc::new(AtomicI32::new(0)),
         };
         W::spawn(Self::run_receive_loop(ws_stream, slots));
         Ok(lh)
@@ -220,9 +221,8 @@ impl<S> Lighthouse<S>
     where
         P: Serialize {
         let path = path.into_iter().map(|s| s.to_string()).collect();
-        let request_id = self.request_id;
+        let request_id = self.request_id.fetch_add(1, Ordering::Relaxed);
         debug! { %request_id, "Sending request" };
-        self.request_id += 1;
         self.send_message(&ClientMessage {
             request_id,
             authentication: self.authentication.clone(),
@@ -292,7 +292,7 @@ impl<S> Lighthouse<S>
 
     /// Sends raw bytes to the lighthouse via the WebSocket connection.
     async fn send_raw(&mut self, bytes: impl Into<Vec<u8>> + Debug) -> Result<()> {
-        Ok(self.ws_sink.send(Message::Binary(bytes.into())).await?)
+        Ok(self.ws_sink.lock().await.send(Message::Binary(bytes.into())).await?)
     }
 
     /// Fetches the credentials used to authenticate with the lighthouse.
