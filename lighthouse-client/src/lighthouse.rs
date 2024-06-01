@@ -9,7 +9,6 @@ use tracing::{warn, error, debug, info};
 use crate::{Check, Error, Result, Spawner};
 
 /// A connection to the lighthouse server for sending requests and receiving events.
-#[derive(Clone)]
 pub struct Lighthouse<S> {
     /// The sink-part of the WebSocket connection.
     ws_sink: Arc<Mutex<SplitSink<S, Message>>>,
@@ -305,5 +304,20 @@ impl<S> Lighthouse<S>
     /// properly, it is recommended to always close the [``Lighthouse``].
     pub async fn close(&self) -> Result<()> {
         Ok(self.ws_sink.lock().await.close().await?)
+    }
+}
+
+// For some reason `#[derive(Clone)]` adds the trait bound `S: Clone`, despite
+// not actually being needed since the WebSocket sink is already wrapped in an
+// `Arc`, therefore we implement `Clone` manually.
+
+impl<S> Clone for Lighthouse<S> {
+    fn clone(&self) -> Self {
+        Self {
+            ws_sink: self.ws_sink.clone(),
+            slots: self.slots.clone(),
+            authentication: self.authentication.clone(),
+            request_id: self.request_id.clone(),
+        }
     }
 }
