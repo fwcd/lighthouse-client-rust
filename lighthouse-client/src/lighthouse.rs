@@ -303,7 +303,7 @@ impl<S> Lighthouse<S>
     /// Closes the WebSocket connection gracefully with a close message. While
     /// the server will usually also handle abruptly closed connections
     /// properly, it is recommended to always close the [``Lighthouse``].
-    pub async fn close(&mut self) -> Result<()> {
-        Ok(self.ws_sink.close().await?)
+    pub async fn close(&self) -> Result<()> {
+        Ok(self.ws_sink.lock().await.close().await?)
     }
 }
