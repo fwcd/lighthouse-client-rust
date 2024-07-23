@@ -5,7 +5,7 @@ use tracing::info;
 async fn run(mut lh: Lighthouse<TokioWebSocket>) -> Result<()> {
     info!("Connected to the Lighthouse server");
 
-    let tree = lh.list(&[]).await?.payload;
+    let tree = lh.list([""; 0]).await?.payload;
     info!("Got {}", tree);
 
     Ok(())

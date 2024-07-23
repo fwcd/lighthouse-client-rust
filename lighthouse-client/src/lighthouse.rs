@@ -121,79 +121,87 @@ impl<S> Lighthouse<S>
     /// Replaces the user's lighthouse model with the given frame.
     pub async fn put_model(&mut self, frame: Frame) -> Result<ServerMessage<()>> {
         let username = self.authentication.username.clone();
-        self.put(&["user", username.as_str(), "model"], Model::Frame(frame)).await
+        self.put(["user", username.as_str(), "model"], Model::Frame(frame)).await
     }
 
     /// Requests a stream of events (including key/controller events) for the user's lighthouse model.
     pub async fn stream_model(&mut self) -> Result<impl Stream<Item = Result<ServerMessage<Model>>>> {
         let username = self.authentication.username.clone();
-        self.stream(&["user", username.as_str(), "model"], ()).await
+        self.stream(["user".into(), username, "model".into()], ()).await
     }
 
     /// Fetches lamp server metrics.
     pub async fn get_laser_metrics(&mut self) -> Result<ServerMessage<LaserMetrics>> {
-        self.get(&["metrics", "laser"]).await
+        self.get(["metrics", "laser"]).await
     }
 
     /// Combines PUT and CREATE. Requires CREATE and WRITE permission.
-    pub async fn post<P>(&mut self, path: &[&str], payload: P) -> Result<ServerMessage<()>>
+    pub async fn post<P>(&mut self, path: impl IntoIterator<Item = impl AsRef<str>> + Debug, payload: P) -> Result<ServerMessage<()>>
     where
         P: Serialize {
         self.perform(&Verb::Post, path, payload).await
     }
 
     /// Updates the resource at the given path with the given payload. Requires WRITE permission.
-    pub async fn put<P>(&mut self, path: &[&str], payload: P) -> Result<ServerMessage<()>>
+    pub async fn put<P>(&mut self, path: impl IntoIterator<Item = impl AsRef<str>> + Debug, payload: P) -> Result<ServerMessage<()>>
     where
         P: Serialize {
         self.perform(&Verb::Put, path, payload).await
     }
 
     /// Creates a resource at the given path. Requires CREATE permission.
-    pub async fn create(&mut self, path: &[&str]) -> Result<ServerMessage<()>> {
+    pub async fn create(&mut self, path: impl IntoIterator<Item = impl AsRef<str>> + Debug) -> Result<ServerMessage<()>> {
         self.perform(&Verb::Create, path, ()).await
     }
 
     /// Deletes a resource at the given path. Requires DELETE permission.
-    pub async fn delete(&mut self, path: &[&str]) -> Result<ServerMessage<()>> {
+    pub async fn delete(&mut self, path: impl IntoIterator<Item = impl AsRef<str>> + Debug) -> Result<ServerMessage<()>> {
         self.perform(&Verb::Delete, path, ()).await
     }
 
     /// Creates a directory at the given path. Requires CREATE permission.
-    pub async fn mkdir(&mut self, path: &[&str]) -> Result<ServerMessage<()>> {
+    pub async fn mkdir(&mut self, path: impl IntoIterator<Item = impl AsRef<str>> + Debug) -> Result<ServerMessage<()>> {
         self.perform(&Verb::Mkdir, path, ()).await
     }
 
     /// Lists the directory tree at the given path. Requires READ permission.
-    pub async fn list(&mut self, path: &[&str]) -> Result<ServerMessage<DirectoryTree>> {
+    pub async fn list(&mut self, path: impl IntoIterator<Item = impl AsRef<str>> + Debug) -> Result<ServerMessage<DirectoryTree>> {
         self.perform(&Verb::List, path, ()).await
     }
 
     /// Gets the resource at the given path. Requires READ permission.
-    pub async fn get<R>(&mut self, path: &[&str]) -> Result<ServerMessage<R>>
+    pub async fn get<R>(&mut self, path: impl IntoIterator<Item = impl AsRef<str>> + Debug) -> Result<ServerMessage<R>>
     where
         R: for<'de> Deserialize<'de> {
         self.perform(&Verb::Get, path, ()).await
     }
 
     /// Links the given source to the given destination path.
-    pub async fn link(&mut self, src_path: &[&str], dest_path: &[&str]) -> Result<ServerMessage<()>> {
+    pub async fn link(
+        &mut self,
+        src_path: impl IntoIterator<Item = impl AsRef<str>> + Debug + Serialize,
+        dest_path: impl IntoIterator<Item = impl AsRef<str>> + Debug,
+    ) -> Result<ServerMessage<()>> {
         self.perform(&Verb::Link, dest_path, src_path).await
     }
 
     /// Unlinks the given source from the given destination path.
-    pub async fn unlink(&mut self, src_path: &[&str], dest_path: &[&str]) -> Result<ServerMessage<()>> {
+    pub async fn unlink(
+        &mut self,
+        src_path: impl IntoIterator<Item = impl AsRef<str>> + Debug + Serialize,
+        dest_path: impl IntoIterator<Item = impl AsRef<str>> + Debug
+    ) -> Result<ServerMessage<()>> {
         self.perform(&Verb::Unlink, dest_path, src_path).await
     }
 
     /// Stops the given stream.
-    pub async fn stop(&mut self, path: &[&str]) -> Result<ServerMessage<()>> {
+    pub async fn stop(&mut self, path: impl IntoIterator<Item = impl AsRef<str>> + Debug) -> Result<ServerMessage<()>> {
         self.perform(&Verb::Stop, path, ()).await
     }
 
     /// Performs a single request to the given path with the given payload.
     #[tracing::instrument(skip(self, payload))]
-    pub async fn perform<P, R>(&mut self, verb: &Verb, path: &[&str], payload: P) -> Result<ServerMessage<R>>
+    pub async fn perform<P, R>(&mut self, verb: &Verb, path: impl IntoIterator<Item = impl AsRef<str>> + Debug, payload: P) -> Result<ServerMessage<R>>
     where
         P: Serialize,
         R: for<'de> Deserialize<'de> {
@@ -205,10 +213,10 @@ impl<S> Lighthouse<S>
     
     /// Performs a STREAM request to the given path with the given payload.
     #[tracing::instrument(skip(self, payload))]
-    pub async fn stream<P, R>(&mut self, path: &[&str], payload: P) -> Result<impl Stream<Item = Result<ServerMessage<R>>>>
+    pub async fn stream<P, R>(&mut self, path: impl IntoIterator<Item = impl AsRef<str>> + Debug, payload: P) -> Result<impl Stream<Item = Result<ServerMessage<R>>>>
     where
         P: Serialize,
-        R: for<'de> Deserialize<'de> {
+        R: for<'de> Deserialize<'de> + 'static {
         let request_id = self.send_request(&Verb::Stream, path, payload).await?;
         let stream = self.receive_streaming(request_id).await?;
         // TODO: Send STOP once dropped
@@ -216,10 +224,10 @@ impl<S> Lighthouse<S>
     }
 
     /// Sends a request to the given path with the given payload.
-    async fn send_request<P>(&mut self, verb: &Verb, path: &[&str], payload: P) -> Result<i32>
+    async fn send_request<P>(&mut self, verb: &Verb, path: impl IntoIterator<Item = impl AsRef<str>> + Debug, payload: P) -> Result<i32>
     where
         P: Serialize {
-        let path = path.into_iter().map(|s| s.to_string()).collect();
+        let path = path.into_iter().map(|s| s.as_ref().to_owned()).collect();
         let request_id = self.request_id;
         debug! { %request_id, "Sending request" };
         self.request_id += 1;
