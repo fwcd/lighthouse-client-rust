@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc, fmt::Debug};
+use std::{collections::HashMap, fmt::Debug, sync::{atomic::{AtomicI32, Ordering}, Arc}};
 
 use async_tungstenite::tungstenite::{Message, self};
 use futures::{prelude::*, channel::mpsc::{Sender, self}, stream::{SplitSink, SplitStream}, lock::Mutex};
@@ -11,13 +11,13 @@ use crate::{Check, Error, Result, Spawner};
 /// A connection to the lighthouse server for sending requests and receiving events.
 pub struct Lighthouse<S> {
     /// The sink-part of the WebSocket connection.
-    ws_sink: SplitSink<S, Message>,
+    ws_sink: Arc<Mutex<SplitSink<S, Message>>>,
     /// The response/event slots, keyed by request id.
     slots: Arc<Mutex<HashMap<i32, Slot<ServerMessage<Value>>>>>,
     /// The credentials used to authenticate with the lighthouse.
     authentication: Authentication,
     /// The next request id. Incremented on every request.
-    request_id: i32,
+    request_id: Arc<AtomicI32>,
 }
 
 /// A facility for coordinating asynchronous responses to a request between a
@@ -47,10 +47,10 @@ impl<S> Lighthouse<S>
         let (ws_sink, ws_stream) = web_socket.split();
         let slots = Arc::new(Mutex::new(HashMap::new()));
         let lh = Self {
-            ws_sink,
+            ws_sink: Arc::new(Mutex::new(ws_sink)),
             slots: slots.clone(),
             authentication,
-            request_id: 0,
+            request_id: Arc::new(AtomicI32::new(0)),
         };
         W::spawn(Self::run_receive_loop(ws_stream, slots));
         Ok(lh)
@@ -119,81 +119,82 @@ impl<S> Lighthouse<S>
     }
 
     /// Replaces the user's lighthouse model with the given frame.
-    pub async fn put_model(&mut self, frame: Frame) -> Result<ServerMessage<()>> {
+    pub async fn put_model(&self, frame: Frame) -> Result<ServerMessage<()>> {
         let username = self.authentication.username.clone();
         self.put(&["user", username.as_str(), "model"], Model::Frame(frame)).await
     }
 
     /// Requests a stream of events (including key/controller events) for the user's lighthouse model.
-    pub async fn stream_model(&mut self) -> Result<impl Stream<Item = Result<ServerMessage<Model>>>> {
+    pub async fn stream_model(&self) -> Result<impl Stream<Item = Result<ServerMessage<Model>>>> {
         let username = self.authentication.username.clone();
         self.stream(&["user", username.as_str(), "model"], ()).await
     }
 
     /// Fetches lamp server metrics.
-    pub async fn get_laser_metrics(&mut self) -> Result<ServerMessage<LaserMetrics>> {
+    pub async fn get_laser_metrics(&self) -> Result<ServerMessage<LaserMetrics>> {
         self.get(&["metrics", "laser"]).await
     }
 
     /// Combines PUT and CREATE. Requires CREATE and WRITE permission.
-    pub async fn post<P>(&mut self, path: &[&str], payload: P) -> Result<ServerMessage<()>>
+    pub async fn post<P>(&self, path: &[&str], payload: P) -> Result<ServerMessage<()>>
     where
         P: Serialize {
         self.perform(&Verb::Post, path, payload).await
     }
 
     /// Updates the resource at the given path with the given payload. Requires WRITE permission.
-    pub async fn put<P>(&mut self, path: &[&str], payload: P) -> Result<ServerMessage<()>>
+    pub async fn put<P>(&self, path: &[&str], payload: P) -> Result<ServerMessage<()>>
     where
         P: Serialize {
         self.perform(&Verb::Put, path, payload).await
     }
 
     /// Creates a resource at the given path. Requires CREATE permission.
-    pub async fn create(&mut self, path: &[&str]) -> Result<ServerMessage<()>> {
+    pub async fn create(&self, path: &[&str]) -> Result<ServerMessage<()>> {
         self.perform(&Verb::Create, path, ()).await
     }
 
     /// Deletes a resource at the given path. Requires DELETE permission.
-    pub async fn delete(&mut self, path: &[&str]) -> Result<ServerMessage<()>> {
+    pub async fn delete(&self, path: &[&str]) -> Result<ServerMessage<()>> {
         self.perform(&Verb::Delete, path, ()).await
     }
 
     /// Creates a directory at the given path. Requires CREATE permission.
-    pub async fn mkdir(&mut self, path: &[&str]) -> Result<ServerMessage<()>> {
+    pub async fn mkdir(&self, path: &[&str]) -> Result<ServerMessage<()>> {
         self.perform(&Verb::Mkdir, path, ()).await
     }
 
     /// Lists the directory tree at the given path. Requires READ permission.
-    pub async fn list(&mut self, path: &[&str]) -> Result<ServerMessage<DirectoryTree>> {
+    pub async fn list(&self, path: &[&str]) -> Result<ServerMessage<DirectoryTree>> {
         self.perform(&Verb::List, path, ()).await
     }
 
     /// Gets the resource at the given path. Requires READ permission.
-    pub async fn get<R>(&mut self, path: &[&str]) -> Result<ServerMessage<R>>
+    pub async fn get<R>(&self, path: &[&str]) -> Result<ServerMessage<R>>
     where
         R: for<'de> Deserialize<'de> {
         self.perform(&Verb::Get, path, ()).await
     }
 
     /// Links the given source to the given destination path.
-    pub async fn link(&mut self, src_path: &[&str], dest_path: &[&str]) -> Result<ServerMessage<()>> {
+    pub async fn link(&self, src_path: &[&str], dest_path: &[&str]) -> Result<ServerMessage<()>> {
         self.perform(&Verb::Link, dest_path, src_path).await
     }
 
     /// Unlinks the given source from the given destination path.
-    pub async fn unlink(&mut self, src_path: &[&str], dest_path: &[&str]) -> Result<ServerMessage<()>> {
+    pub async fn unlink(&self, src_path: &[&str], dest_path: &[&str]) -> Result<ServerMessage<()>> {
         self.perform(&Verb::Unlink, dest_path, src_path).await
     }
 
-    /// Stops the given stream.
-    pub async fn stop(&mut self, path: &[&str]) -> Result<ServerMessage<()>> {
+    /// Stops the given stream. **Should generally not be called manually**,
+    /// since streams will automatically be stopped once dropped.
+    pub async fn stop(&self, path: &[&str]) -> Result<ServerMessage<()>> {
         self.perform(&Verb::Stop, path, ()).await
     }
 
     /// Performs a single request to the given path with the given payload.
     #[tracing::instrument(skip(self, payload))]
-    pub async fn perform<P, R>(&mut self, verb: &Verb, path: &[&str], payload: P) -> Result<ServerMessage<R>>
+    pub async fn perform<P, R>(&self, verb: &Verb, path: &[&str], payload: P) -> Result<ServerMessage<R>>
     where
         P: Serialize,
         R: for<'de> Deserialize<'de> {
@@ -204,25 +205,38 @@ impl<S> Lighthouse<S>
     }
     
     /// Performs a STREAM request to the given path with the given payload.
+    /// Automatically sends a STOP once dropped.
     #[tracing::instrument(skip(self, payload))]
-    pub async fn stream<P, R>(&mut self, path: &[&str], payload: P) -> Result<impl Stream<Item = Result<ServerMessage<R>>>>
+    pub async fn stream<P, R>(&self, path: &[&str], payload: P) -> Result<impl Stream<Item = Result<ServerMessage<R>>>>
     where
         P: Serialize,
         R: for<'de> Deserialize<'de> {
         let request_id = self.send_request(&Verb::Stream, path, payload).await?;
         let stream = self.receive_streaming(request_id).await?;
-        // TODO: Send STOP once dropped
-        Ok(stream)
+        Ok(stream.guard({
+            // Stop the stream on drop
+            let this = (*self).clone();
+            let path: Vec<_> = path.into_iter().map(|s| s.to_string()).collect();
+            move || {
+                tokio::spawn(async move {
+                    // TODO: Find a more elegant way to pass the path, ideally without
+                    // converting back and forth between Vec<String>, Vec<&str> and &[&str]
+                    let path: Vec<_> = path.iter().map(|s| &**s).collect();
+                    if let Err(error) = this.stop(&path).await {
+                        error! { ?path, %error, "Could not STOP stream" };
+                    }
+                });
+            }
+        }))
     }
 
     /// Sends a request to the given path with the given payload.
-    async fn send_request<P>(&mut self, verb: &Verb, path: &[&str], payload: P) -> Result<i32>
+    async fn send_request<P>(&self, verb: &Verb, path: &[&str], payload: P) -> Result<i32>
     where
         P: Serialize {
         let path = path.into_iter().map(|s| s.to_string()).collect();
-        let request_id = self.request_id;
+        let request_id = self.request_id.fetch_add(1, Ordering::Relaxed);
         debug! { %request_id, "Sending request" };
-        self.request_id += 1;
         self.send_message(&ClientMessage {
             request_id,
             authentication: self.authentication.clone(),
@@ -235,7 +249,7 @@ impl<S> Lighthouse<S>
     }
 
     /// Sends a generic message to the lighthouse.
-    async fn send_message<P>(&mut self, message: &ClientMessage<P>) -> Result<()>
+    async fn send_message<P>(&self, message: &ClientMessage<P>) -> Result<()>
     where
         P: Serialize {
         self.send_raw(rmp_serde::to_vec_named(message)?).await
@@ -291,8 +305,8 @@ impl<S> Lighthouse<S>
     }
 
     /// Sends raw bytes to the lighthouse via the WebSocket connection.
-    async fn send_raw(&mut self, bytes: impl Into<Vec<u8>> + Debug) -> Result<()> {
-        Ok(self.ws_sink.send(Message::Binary(bytes.into())).await?)
+    async fn send_raw(&self, bytes: impl Into<Vec<u8>> + Debug) -> Result<()> {
+        Ok(self.ws_sink.lock().await.send(Message::Binary(bytes.into())).await?)
     }
 
     /// Fetches the credentials used to authenticate with the lighthouse.
@@ -303,7 +317,22 @@ impl<S> Lighthouse<S>
     /// Closes the WebSocket connection gracefully with a close message. While
     /// the server will usually also handle abruptly closed connections
     /// properly, it is recommended to always close the [``Lighthouse``].
-    pub async fn close(&mut self) -> Result<()> {
-        Ok(self.ws_sink.close().await?)
+    pub async fn close(&self) -> Result<()> {
+        Ok(self.ws_sink.lock().await.close().await?)
+    }
+}
+
+// For some reason `#[derive(Clone)]` adds the trait bound `S: Clone`, despite
+// not actually being needed since the WebSocket sink is already wrapped in an
+// `Arc`, therefore we implement `Clone` manually.
+
+impl<S> Clone for Lighthouse<S> {
+    fn clone(&self) -> Self {
+        Self {
+            ws_sink: self.ws_sink.clone(),
+            slots: self.slots.clone(),
+            authentication: self.authentication.clone(),
+            request_id: self.request_id.clone(),
+        }
     }
 }

@@ -2,7 +2,7 @@ use clap::Parser;
 use lighthouse_client::{protocol::{Authentication, Color, Frame}, Lighthouse, Result, TokioWebSocket, LIGHTHOUSE_URL};
 use tracing::info;
 
-async fn run(mut lh: Lighthouse<TokioWebSocket>) -> Result<()> {
+async fn run(lh: Lighthouse<TokioWebSocket>) -> Result<()> {
     info!("Connected to the Lighthouse server");
 
     lh.put_model(Frame::fill(Color::BLACK)).await?;

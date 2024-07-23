@@ -5,7 +5,7 @@ use lighthouse_client::{protocol::{Authentication, Frame}, Lighthouse, Result, T
 use tokio::time::{self, Instant};
 use tracing::info;
 
-async fn run(mut lh: Lighthouse<TokioWebSocket>, delay_ms: Option<u64>) -> Result<()> {
+async fn run(lh: Lighthouse<TokioWebSocket>, delay_ms: Option<u64>) -> Result<()> {
     info!("Connected to the Lighthouse server");
 
     let mut last_second = Instant::now();

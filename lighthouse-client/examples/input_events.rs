@@ -4,7 +4,7 @@ use lighthouse_client::{protocol::Authentication, Lighthouse, Result, TokioWebSo
 use lighthouse_protocol::Model;
 use tracing::info;
 
-async fn run(mut lh: Lighthouse<TokioWebSocket>) -> Result<()> {
+async fn run(lh: Lighthouse<TokioWebSocket>) -> Result<()> {
     info!("Connected to the Lighthouse server");
 
     // Stream input events
